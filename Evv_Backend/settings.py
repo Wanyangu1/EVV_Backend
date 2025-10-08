@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'django_extensions',
     'import_export',
     'django_filters',
+    'evv',
 ]
 
 MIDDLEWARE = [
@@ -111,6 +112,10 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Media files (signatures/images)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework.authentication.BasicAuthentication",
@@ -126,7 +131,7 @@ REST_FRAMEWORK = {
 # Simple JSON Web Token Authentication Settings
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(days=1),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=5),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "UPDATE_LAST_LOGIN": True,
 }
 
