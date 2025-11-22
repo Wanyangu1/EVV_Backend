@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from datetime import timedelta
 
 User = get_user_model()
 
@@ -21,13 +22,13 @@ class Client(models.Model):
     age = models.PositiveSmallIntegerField(null=True, blank=True)
     phone = models.CharField(max_length=50, blank=True)
     email = models.EmailField(blank=True)
-    socials = models.JSONField(blank=True, null=True)  
+    socials = models.JSONField(blank=True, null=True)
     next_of_kin_name = models.CharField(max_length=200, blank=True)
     next_of_kin_phone = models.CharField(max_length=100, blank=True)
-    ssn = models.CharField(max_length=50, blank=True)  
+    ssn = models.CharField(max_length=50, blank=True)
     medical_history = models.TextField(blank=True)
     visits_per_week = models.PositiveSmallIntegerField(default=0)
-    visit_times = models.JSONField(blank=True, null=True)  
+    visit_times = models.JSONField(blank=True, null=True)
     services_needed = models.ManyToManyField(Service, blank=True, related_name='clients')
     address = models.TextField(blank=True)
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
@@ -44,6 +45,9 @@ class Client(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('last_name', 'first_name')
 
     def __str__(self):
         return f"{self.first_name} {self.last_name}"
@@ -90,6 +94,7 @@ class VisitLog(models.Model):
     check_out_lat = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     check_out_lng = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
 
+    # signatures stored as images (Base64 -> Image via serializer)
     client_signature = models.ImageField(upload_to='signatures/%Y/%m/%d/', null=True, blank=True)
     caregiver_signature = models.ImageField(upload_to='signatures/%Y/%m/%d/', null=True, blank=True)
 
@@ -99,11 +104,18 @@ class VisitLog(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="checked_in")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        ordering = ('-created_at',)
+
     def save(self, *args, **kwargs):
-        """Automatically calculate hours worked when check-out exists."""
+        """Automatically calculate hours worked when both check-in and check-out exist."""
         if self.check_in_time and self.check_out_time:
-            delta = (self.check_out_time - self.check_in_time).total_seconds() / 3600.0
-            self.hours_worked = round(delta, 2)
+            delta_seconds = (self.check_out_time - self.check_in_time).total_seconds()
+            # protect against negative durations
+            if delta_seconds < 0:
+                self.hours_worked = None
+            else:
+                self.hours_worked = round(delta_seconds / 3600.0, 2)
         super().save(*args, **kwargs)
 
     def __str__(self):
