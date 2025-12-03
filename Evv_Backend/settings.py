@@ -14,10 +14,20 @@ from pathlib import Path
 from datetime import timedelta
 import os
 from dotenv import load_dotenv
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+EVV_API_BASE = os.getenv("EVV_BASE_URL")
+EVV_SUBSCRIPTION_KEY = os.getenv("EVV_SUBSCRIPTION_KEY")
+EVV_ACCOUNT_ID = "bd28b0cd-44ab-41c1-9cbd-55bddc81070a"
+EVV_PROVIDER_ID = "211108"
+EVV_DEFAULT_TIMEZONE="America/Phoenix"
+EVV_DEFAULT_ASSENT="Yes"
+
+
+print("DEBUG KEY:", EVV_SUBSCRIPTION_KEY)
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
