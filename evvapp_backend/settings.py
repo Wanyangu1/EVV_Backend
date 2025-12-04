@@ -73,7 +73,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'Evv_Backend.urls'
+ROOT_URLCONF = 'evvapp_backend.urls'
 
 TEMPLATES = [
     {

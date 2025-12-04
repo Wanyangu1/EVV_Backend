@@ -21,7 +21,7 @@ from django.conf.urls.static import static
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path("api/", include("Evv_Backend.api.urls")),
+    path("api/", include("evvapp_backend.api.urls")),
     path('api/evv/', include('evv.urls')),
 ]
 if settings.DEBUG:
