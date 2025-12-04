@@ -38,8 +38,7 @@ SECRET_KEY = 'django-insecure-3d+tq7w%^@8z1xl7i&&sr-6faup!+be*1f1d4f3e1ph)t8=yd-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
-
+ALLOWED_HOSTS = ["*"]
 
 # Application definition
 
@@ -90,7 +89,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'Evv_Backend.wsgi.application'
+WSGI_APPLICATION = 'evvapp_backend.wsgi.application'
 
 
 # Database
@@ -151,6 +150,8 @@ CSRF_COOKIE_HTTPONLY = False  # Allows the frontend to access the CSRF token
 CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOWED_ORIGINS = [
+    "https://divinecaresystem.jikubaliafrica.org",
+    "http://divinecaresystem.jikubaliafrica.org",
     "http://localhost:8080",
     "http://localhost:8000",
     "http://localhost:3000",
