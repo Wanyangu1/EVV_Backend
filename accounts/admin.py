@@ -11,12 +11,14 @@ class UserAdmin(BaseUserAdmin):
         "name",
         "email",
         "phone",
+        "role",  # Added role to list display
         "is_staff",
         "is_superuser",
         "is_active",
     ]
 
     list_filter = [
+        "role",  # Added role to filters
         "is_staff",
         "is_superuser",
         "is_active",
@@ -24,7 +26,7 @@ class UserAdmin(BaseUserAdmin):
 
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
-        ('Personal Info', {'fields': ('name', 'phone')}),
+        ('Personal Info', {'fields': ('name', 'phone', 'role')}),  # Added role to fields
         ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         ('Important dates', {'fields': ('last_login',)}),
     )
@@ -32,13 +34,10 @@ class UserAdmin(BaseUserAdmin):
     add_fieldsets = (
         (None, {
             'classes': ('wide',),
-            'fields': ('email', 'name', 'phone', 'password1', 'password2'),
+            'fields': ('email', 'name', 'phone', 'role', 'password1', 'password2'),  # Added role to add form
         }),
     )
 
     search_fields = ('email', 'name')
     ordering = ('email',)
     filter_horizontal = ('groups', 'user_permissions')
-
-
-

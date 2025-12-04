@@ -15,7 +15,22 @@ class User(AbstractUser):
     phone = models.CharField(max_length=255, null=True, blank=True)
     email_verified_at = models.DateTimeField(null=True, blank=True)
     phone_verified_at = models.DateTimeField(null=True, blank=True)
-
+    
+    # Role field - simplified approach
+    ROLE_CHOICES = [
+        ('admin', 'Administrator'),
+        ('superuser', 'Super User'),
+        ('caregiver', 'Caregiver'),
+        ('coordinator', 'Care Coordinator'),
+        ('manager', 'Manager'),
+    ]
+    
+    role = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        default='caregiver',
+    )
+    
     # Override groups and user_permissions fields to avoid clashes
     groups = models.ManyToManyField(
         Group,
@@ -37,6 +52,13 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.name
+    
+    def is_admin(self):
+        return self.role in ['admin', 'superuser']
+    
+    def is_caregiver(self):
+        return self.role == 'caregiver'
+
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
