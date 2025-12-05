@@ -337,7 +337,7 @@ class ClientEmployeeXref(models.Model):
     
     # Procedure/HCPCS code
     procedure_code = models.CharField(
-        max_length=5,
+        max_length=10,
         help_text="HCPCS code (see Section 10.10 of spec)"
     )
     
@@ -349,7 +349,7 @@ class ClientEmployeeXref(models.Model):
     
     # Relationship info
     live_in = models.CharField(
-        max_length=5,
+        max_length=10,
         choices=[('Yes', 'Yes'), ('No', 'No')],
         default='No'
     )
