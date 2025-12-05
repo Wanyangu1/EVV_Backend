@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
+import dj_database_url
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -21,8 +22,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 EVV_API_BASE = os.getenv("EVV_BASE_URL")
 EVV_SUBSCRIPTION_KEY = os.getenv("EVV_SUBSCRIPTION_KEY")
-EVV_ACCOUNT_ID = "bd28b0cd-44ab-41c1-9cbd-55bddc81070a"
-EVV_PROVIDER_ID = "211108"
+EVV_ACCOUNT_ID = os.environ.get("EVV_ACCOUNT_ID")
+EVV_PROVIDER_ID = os.environ.get("EVV_PROVIDER_ID")
 EVV_DEFAULT_TIMEZONE="America/Phoenix"
 EVV_DEFAULT_ASSENT="Yes"
 
@@ -97,10 +98,11 @@ WSGI_APPLICATION = 'evvapp_backend.wsgi.application'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': dj_database_url.config(
+        default=os.environ.get('DATABASE_URL'),  # Render provides this
+        conn_max_age=600, 
+        ssl_require=True   
+    )
 }
 
 
