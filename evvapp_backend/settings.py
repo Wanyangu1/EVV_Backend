@@ -97,13 +97,13 @@ WSGI_APPLICATION = 'evvapp_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# DATABASES = {
-#     'default': dj_database_url.config(
-#         default=os.environ.get('DATABASE_URL'),  # Render provides this
-#         conn_max_age=600, 
-#         ssl_require=True   
-#     )
-# }
+DATABASES = {
+    'default': dj_database_url.config(
+        default=os.environ.get('DATABASE_URL'),  # Render provides this
+        conn_max_age=600, 
+        ssl_require=True   
+    )
+}
 # DATABASES = {
 #     'default': {
 #         'ENGINE': 'django.db.backends.sqlite3',
