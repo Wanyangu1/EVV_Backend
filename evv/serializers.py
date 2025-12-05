@@ -7,7 +7,11 @@ import re
 import logging
 from django.db import transaction
 from django.utils import timezone
+from django.contrib.auth import get_user_model
+
 logger = logging.getLogger(__name__)
+
+User = get_user_model()
 
 
 class FlexibleDateField(serializers.DateField):
@@ -139,20 +143,130 @@ class VisitSerializer(serializers.ModelSerializer):
             validated_data['created_by'] = None
         
         return super().create(validated_data)
-
+    
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'name', 'role', 'email_verified_at']
+        read_only_fields = ['id', 'email_verified_at']
+    
+class UserCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating users from employee data"""
+    password = serializers.CharField(write_only=True, required=False)
+    employee_id = serializers.CharField(write_only=True, required=False)
+    
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'name', 'role', 'password', 'employee_id']
+        read_only_fields = ['id']
+    
+    def create(self, validated_data):
+        """Create a user from employee data"""
+        employee_id = validated_data.pop('employee_id', None)
+        password = validated_data.pop('password', None)
+        
+        # Generate password if not provided
+        if not password:
+            import secrets
+            password = secrets.token_urlsafe(12)
+        
+        # Create user
+        user = User.objects.create_user(
+            email=validated_data['email'],
+            name=validated_data['name'],
+            password=password,
+            role=validated_data.get('role', 'caregiver')
+        )
+        
+        # Link to employee if employee_id provided
+        if employee_id:
+            try:
+                employee = Employee.objects.get(employee_id=employee_id)
+                employee.user = user
+                employee.save(update_fields=['user'])
+            except Employee.DoesNotExist:
+                # Employee not found, but user is created anyway
+                pass
+        
+        return user
+    
+class EmployeeSerializer(serializers.ModelSerializer):
+    date_of_birth = FlexibleDateField(required=False)
+    hire_date = FlexibleDateField(required=False)
+    
+    # Add these fields to show user relationship
+    user = UserSerializer(read_only=True)
+    is_user_account_created = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Employee
+        fields = '__all__'
+    
+    def get_is_user_account_created(self, obj):
+        """Check if a user account exists for this employee"""
+        return hasattr(obj, 'user') and obj.user is not None
+    
+    def create(self, validated_data):
+        """Override create to ensure email uniqueness"""
+        # Check if email already exists as a user
+        email = validated_data.get('email')
+        
+        # Check if user already exists with this email
+        existing_user = User.objects.filter(email=email).first()
+        if existing_user:
+            # Check if this user is already linked to another employee
+            if hasattr(existing_user, 'employee_profile') and existing_user.employee_profile:
+                raise serializers.ValidationError({
+                    'email': f'User with email {email} is already linked to another employee'
+                })
+            else:
+                # Link existing user to this employee
+                employee = super().create(validated_data)
+                employee.user = existing_user
+                employee.save(update_fields=['user'])
+                return employee
+        
+        # Create the employee first (signal will create user)
+        employee = super().create(validated_data)
+        
+        return employee
+    
+    def update(self, instance, validated_data):
+        """Override update to sync with user account"""
+        email = validated_data.get('email')
+        
+        if email and email != instance.email:
+            # Check if new email already exists as a user
+            existing_user = User.objects.filter(email=email).first()
+            if existing_user and existing_user != instance.user:
+                raise serializers.ValidationError({
+                    'email': f'Email {email} is already in use by another user'
+                })
+        
+        # Update employee
+        employee = super().update(instance, validated_data)
+        
+        # Sync with user if exists
+        if employee.user:
+            # Update user email if changed
+            if 'email' in validated_data:
+                employee.user.email = validated_data['email']
+            
+            # Update user name if employee name changed
+            if 'first_name' in validated_data or 'last_name' in validated_data:
+                first_name = validated_data.get('first_name', instance.first_name)
+                last_name = validated_data.get('last_name', instance.last_name)
+                employee.user.name = f"{first_name} {last_name}"
+            
+            employee.user.save()
+        
+        return employee
+    
 class ClientSerializer(serializers.ModelSerializer):
     date_of_birth = FlexibleDateField(required=False)
 
     class Meta:
         model = Client
-        fields = '__all__'
-
-class EmployeeSerializer(serializers.ModelSerializer):
-    date_of_birth = FlexibleDateField(required=False)
-    hire_date = FlexibleDateField(required=False)
-
-    class Meta:
-        model = Employee
         fields = '__all__'
 
 

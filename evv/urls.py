@@ -30,6 +30,7 @@ from .views import (
     # Xref Management
     CreateXrefAndSend,
     UpdateXrefRelationship,
+    CreateUserForEmployeeView,
 )
 
 urlpatterns = [
@@ -41,6 +42,7 @@ urlpatterns = [
     path("visits/", VisitView.as_view(), name="visits"),
     path("visits/<int:pk>/", VisitDetailView.as_view(), name="visit-detail"), 
     path("xrefs/", XrefView.as_view(), name="xrefs"),
+    path("employees/<int:employee_id>/create-user/", CreateUserForEmployeeView.as_view(), name="create-user-for-employee"),
     
     # ------------------------
     # CAREGIVER MOBILE ENDPOINTS

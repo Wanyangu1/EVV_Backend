@@ -3,6 +3,9 @@ import re
 import logging
 from datetime import date, datetime
 from django.utils import timezone
+from django.contrib.auth import get_user_model
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
 
 import requests
 from django.conf import settings
@@ -79,27 +82,96 @@ class CheckClientStatus(APIView):
                 "details": str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-class EmployeeView(APIView):
-    def get(self, request):
-        try:
-            employees = Employee.objects.all()
-            serializer = EmployeeSerializer(employees, many=True)
-            return Response(serializer.data)
-        except Exception as e:
-            logger.exception("Error fetching employees")
-            return Response({"error": "Failed to fetch employees"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+User = get_user_model()
 
-    def post(self, request):
-        try:
-            serializer = EmployeeSerializer(data=request.data)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            logger.exception("Error creating employee")
-            return Response({"error": "Failed to create employee"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+class EmployeeView(generics.ListCreateAPIView):
+    serializer_class = EmployeeSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        """Get employees with their user relationships"""
+        queryset = Employee.objects.all().select_related('user')
+        
+        # Filter by status if provided
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        # Filter by role if provided (through user)
+        role_filter = self.request.query_params.get('role')
+        if role_filter:
+            queryset = queryset.filter(user__role=role_filter)
+        
+        # Filter employees with/without user accounts
+        has_user = self.request.query_params.get('has_user')
+        if has_user == 'true':
+            queryset = queryset.filter(user__isnull=False)
+        elif has_user == 'false':
+            queryset = queryset.filter(user__isnull=True)
+        
+        return queryset
+    
+    def create(self, request, *args, **kwargs):
+        """Create employee (user will be created via signal)"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        # Check if email is already in use by a user
+        email = serializer.validated_data.get('email')
+        existing_user = User.objects.filter(email=email).first()
+        
+        if existing_user and not hasattr(existing_user, 'employee_profile'):
+            # User exists but isn't linked to an employee
+            # We could link them, but for safety we'll return an error
+            return Response({
+                'error': f'User with email {email} already exists. Please use a different email.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create employee (signal will handle user creation)
+        employee = serializer.save()
+        
+        # Refresh to get the user relationship
+        employee.refresh_from_db()
+        
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            EmployeeSerializer(employee).data,
+            status=status.HTTP_201_CREATED,
+            headers=headers
+        )
 
+
+# Optional: Create a view to manually create users for existing employees
+class CreateUserForEmployeeView(generics.GenericAPIView):
+    """API endpoint to manually create user for an existing employee"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request, employee_id):
+        try:
+            employee = Employee.objects.get(id=employee_id)
+            
+            # Check if user already exists
+            if employee.user:
+                return Response({
+                    'error': f'User already exists for employee {employee.full_name}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Import your signal function to create user
+            from .signals import create_user_for_employee
+            create_user_for_employee(sender=Employee, instance=employee, created=False)
+            
+            # Refresh employee to get user
+            employee.refresh_from_db()
+            
+            return Response({
+                'message': f'User created for employee {employee.full_name}',
+                'employee': EmployeeSerializer(employee).data
+            }, status=status.HTTP_201_CREATED)
+            
+        except Employee.DoesNotExist:
+            return Response({
+                'error': 'Employee not found'
+            }, status=status.HTTP_404_NOT_FOUND)
 
 class VisitView(APIView):
     """

@@ -2,14 +2,25 @@ from django.db import models
 from django.core.validators import RegexValidator
 from django.utils import timezone
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.contrib.auth import get_user_model
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 import json
 import re
 
+User = get_user_model()
 
 # -----------------------
 # EMPLOYEE MODEL (UPDATED WITH DEFAULTS)
 # -----------------------
 class Employee(models.Model):
+    user = models.OneToOneField(
+        User, 
+        on_delete=models.SET_NULL,  # or CASCADE if you want to delete user when employee is deleted
+        null=True,
+        blank=True,
+        related_name='employee_profile'
+    )
     # Basic Information
     employee_id = models.CharField(max_length=50, unique=True)
     first_name = models.CharField(max_length=100)
