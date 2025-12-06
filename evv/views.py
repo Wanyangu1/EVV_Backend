@@ -43,6 +43,27 @@ def format_date_mmddyyyy(d: date) -> str:
 def safe_str(val):
     return (val or "").strip()
 
+def get_user_employee(user):
+    """
+    Helper to get employee associated with a user
+    Returns employee object or None
+    """
+    if not user.is_authenticated:
+        return None
+    
+    try:
+        return user.employee_profile
+    except (AttributeError, Employee.DoesNotExist):
+        return None
+
+def filter_visits_by_user(queryset, user):
+    """
+    Helper to filter visits by user's employee profile
+    """
+    employee = get_user_employee(user)
+    if employee:
+        return queryset.filter(employee=employee)
+    return queryset.none()
 
 class ClientView(APIView):
     def get(self, request):
@@ -191,7 +212,20 @@ class VisitView(APIView):
             # Start with all visits - include related data using prefetch_related
             visits = Visit.objects.select_related('client', 'employee').all()
             
-            # Apply filters
+            # =============== ADD THIS FILTER ===============
+            # Filter visits by logged-in user's employee profile
+            if request.user.is_authenticated:
+                try:
+                    # Get the employee associated with this user
+                    employee = request.user.employee_profile
+                    # Filter visits to only those assigned to this employee
+                    visits = visits.filter(employee=employee)
+                except (AttributeError, Employee.DoesNotExist):
+                    # If user doesn't have an employee profile, return empty
+                    visits = visits.none()
+            # =============== END OF ADDED FILTER ===============
+            
+            # Apply existing filters
             if visit_type:
                 # Handle multiple types separated by commas
                 if ',' in visit_type:
@@ -260,6 +294,7 @@ class VisitView(APIView):
             return Response({"error": "Failed to fetch visits", "details": str(e)}, 
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    # POST method remains the same
     def post(self, request):
         try:
             # Check if this is a schedule or completed visit
@@ -293,13 +328,39 @@ class VisitDetailView(APIView):
     - DELETE: Cancel visit
     """
     
-    def get(self, request, pk):
+    def get_object(self, pk, user):
+        """
+        Helper method to get visit object with user permission check
+        """
         try:
             visit = Visit.objects.get(pk=pk)
+            
+            # =============== ADD THIS CHECK ===============
+            # Check if visit belongs to logged-in user's employee
+            if user.is_authenticated:
+                try:
+                    employee = user.employee_profile
+                    if visit.employee != employee:
+                        # User doesn't own this visit
+                        return None
+                except (AttributeError, Employee.DoesNotExist):
+                    # User doesn't have an employee profile
+                    return None
+            # =============== END OF ADDED CHECK ===============
+            
+            return visit
+        except Visit.DoesNotExist:
+            return None
+    
+    def get(self, request, pk):
+        try:
+            visit = self.get_object(pk, request.user)
+            if not visit:
+                return Response({"error": "Visit not found or access denied"}, 
+                              status=status.HTTP_404_NOT_FOUND)
+            
             serializer = VisitSerializer(visit)
             return Response(serializer.data)
-        except Visit.DoesNotExist:
-            return Response({"error": "Visit not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             logger.exception(f"Error fetching visit {pk}")
             return Response({"error": "Failed to fetch visit", "details": str(e)}, 
@@ -307,8 +368,12 @@ class VisitDetailView(APIView):
     
     def patch(self, request, pk):
         try:
-            visit = Visit.objects.get(pk=pk)
+            visit = self.get_object(pk, request.user)
+            if not visit:
+                return Response({"error": "Visit not found or access denied"}, 
+                              status=status.HTTP_404_NOT_FOUND)
             
+            # ACTUALLY INCLUDE THE PATCH LOGIC HERE:
             # Handle check-in
             if 'check_in' in request.data:
                 checkin_data = request.data['check_in']
@@ -379,8 +444,6 @@ class VisitDetailView(APIView):
             serializer = VisitSerializer(visit)
             return Response(serializer.data)
             
-        except Visit.DoesNotExist:
-            return Response({"error": "Visit not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             logger.exception(f"Error updating visit {pk}")
             return Response({"error": "Failed to update visit", "details": str(e)}, 
@@ -388,7 +451,10 @@ class VisitDetailView(APIView):
     
     def delete(self, request, pk):
         try:
-            visit = Visit.objects.get(pk=pk)
+            visit = self.get_object(pk, request.user)
+            if not visit:
+                return Response({"error": "Visit not found or access denied"}, 
+                              status=status.HTTP_404_NOT_FOUND)
             
             # Don't delete, just mark as cancelled
             if not visit.is_completed:
@@ -399,8 +465,6 @@ class VisitDetailView(APIView):
                 return Response({"error": "Cannot delete completed visit"}, 
                               status=status.HTTP_400_BAD_REQUEST)
                 
-        except Visit.DoesNotExist:
-            return Response({"error": "Visit not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             logger.exception(f"Error cancelling visit {pk}")
             return Response({"error": "Failed to cancel visit", "details": str(e)}, 
@@ -430,141 +494,6 @@ class VisitDetailView(APIView):
             logger.error(f"Error submitting visit {visit.id} to EVV: {str(e)}")
             visit.add_evv_error(f"EVV submission error: {str(e)}")
             return False
-
-
-class SendClientsToEVV(APIView):
-    """
-    Build EVV-compliant client payloads from local Client model, validate,
-    and send only valid records to AHCCCS / EVV vendor.
-    """
-
-    def post(self, request):
-        try:
-            clients_qs = Client.objects.all()
-            if not clients_qs.exists():
-                return Response({"error": "No clients found"}, status=status.HTTP_404_NOT_FOUND)
-
-            payload = []             # list of clients to send
-            invalid_records = []     # diagnostics for records we won't send
-            seq = 1
-
-            # provider config from settings
-            provider_id = getattr(settings, "EVV_PROVIDER_ID", None)
-            provider_qualifier = getattr(settings, "EVV_PROVIDER_QUALIFIER", "MedicaidID")
-            default_timezone = getattr(settings, "EVV_DEFAULT_TIMEZONE", "America/Phoenix")
-            default_assent = getattr(settings, "EVV_DEFAULT_ASSENT", "Yes")
-
-            for c in clients_qs:
-                errors = []
-                first = safe_str(getattr(c, "first_name", None))
-                last = safe_str(getattr(c, "last_name", None))
-
-                # Validate names
-                if not first:
-                    errors.append("First name is required")
-                elif len(first) > 30 or not NAME_RE.match(first):
-                    errors.append("First name must be ≤30 chars and contain only letters, spaces, hyphen, apostrophe")
-
-                if not last:
-                    errors.append("Last name is required")
-                elif len(last) > 30 or not NAME_RE.match(last):
-                    errors.append("Last name must be ≤30 chars and contain only letters, spaces, hyphen, apostrophe")
-
-                # DOB
-                dob_val = getattr(c, "dob", None)
-                try:
-                    dob_str = format_date_mmddyyyy(dob_val)
-                except Exception:
-                    errors.append("Invalid DOB (must be a date)")
-
-                # Medicaid ID check or fallback test ID
-                medicaid = safe_str(getattr(c, "medicaid_id", None))
-                if medicaid:
-                    if not MEDICAID_RE.match(medicaid):
-                        errors.append("medicaid_id must be uppercase letter + 8 digits (e.g. A12345678)")
-                else:
-                    # fallback generator for test use only
-                    medicaid = build_test_medicaid_id_from_pk(c.pk)
-
-                # ClientCustomID & ClientQualifier and ClientIdentifier should use medicaid (fits required format)
-                client_custom_id = medicaid
-                client_qualifier = client_custom_id
-
-                if len(client_custom_id) > 20:
-                    errors.append("ClientCustomID must be <= 20 characters")
-
-                # timezone and assent plan
-                tz = safe_str(getattr(c, "timezone", None)) or default_timezone
-                if not tz or len(tz) > 64:
-                    errors.append("timezone is required and must be <= 64 characters")
-
-                assent = safe_str(getattr(c, "assent_plan", None)) or default_assent
-                if assent not in ("Yes", "No"):
-                    errors.append("assent_plan must be 'Yes' or 'No'")
-
-                if errors:
-                    invalid_records.append({
-                        "client_id": getattr(c, "client_id", None),
-                        "pk": c.pk,
-                        "errors": errors
-                    })
-                    continue
-
-                # Build EVV-compliant record
-                record = {
-                    "ProviderIdentification": {
-                        "ProviderQualifier": provider_qualifier,
-                        "ProviderID": str(provider_id) if provider_id else None
-                    },
-                    "ClientOtherID": getattr(c, "client_id", None) or f"CL{str(c.pk).zfill(6)}",
-                    "SequenceID": seq,
-                    "ClientInformation": {
-                        "ClientID": getattr(c, "client_id", None) or f"CL{str(c.pk).zfill(6)}",
-                        "ClientCustomID": client_custom_id,
-                        "ClientQualifier": client_qualifier,
-                        "ClientFirstName": first,
-                        "ClientLastName": last,
-                        "ClientActiveIndicator": "Yes",
-                        "ClientTimezone": tz,
-                        "ProviderAssentContPlan": assent,
-                        "Person": {
-                            "PersonName": {
-                                "PersonFirstName": first,
-                                "PersonLastName": last
-                            },
-                            "PersonDateOfBirth": dob_str
-                        },
-                        "ClientMedicaidID": medicaid,
-                        "ClientIdentifier": medicaid
-                    }
-                }
-
-                payload.append(record)
-                seq += 1
-
-            # if nothing valid to send, return diagnostics
-            if not payload:
-                return Response({
-                    "message": "No valid clients to send",
-                    "invalid_records": invalid_records
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            # Send to EVV
-            logger.info(f"Sending {len(payload)} client records to EVV")
-            result = evv.upload_clients(payload)
-
-            return Response({
-                "message": "Clients sent to EVV",
-                "count_sent": len(payload),
-                "invalid_count": len(invalid_records),
-                "invalid_records": invalid_records,
-                "evv_response": result
-            }, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            logger.exception("Error sending clients to EVV")
-            return Response({"error": "Internal server error", "details": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 class EVVUploadClients(APIView):
     """Upload clients to AHCCCS EVV (raw payload forwarder)"""
@@ -1260,7 +1189,6 @@ class SendVisitsToEVV(APIView):
                 "details": str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-# views.py - ADD NEW CaregiverOperationsView
 class CaregiverOperationsView(APIView):
     """
     Specialized endpoints for caregiver mobile app operations.
@@ -1269,19 +1197,24 @@ class CaregiverOperationsView(APIView):
     def get(self, request):
         """Get today's schedules for logged-in caregiver"""
         try:
-            # Get caregiver from authentication
-            # Assuming JWT or session auth
-            caregiver_id = request.user.id if request.user.is_authenticated else None
-            
-            if not caregiver_id:
+            # =============== ENHANCED CHECK ===============
+            if not request.user.is_authenticated:
                 return Response({"error": "Authentication required"}, 
                               status=status.HTTP_401_UNAUTHORIZED)
+            
+            # Get employee profile for logged-in user
+            try:
+                employee = request.user.employee_profile
+            except AttributeError:
+                return Response({"error": "User is not associated with an employee profile"}, 
+                              status=status.HTTP_403_FORBIDDEN)
+            # =============== END OF ENHANCED CHECK ===============
             
             today = timezone.now().date()
             
             # Get today's schedules for this caregiver
             visits = Visit.objects.select_related('client').filter(
-                employee_id=caregiver_id,
+                employee=employee,  # Already filtered by employee
                 schedule_start_time__date=today,
                 visit_type='scheduled'
             ).order_by('schedule_start_time')
@@ -1325,6 +1258,19 @@ class CaregiverOperationsView(APIView):
     def post(self, request):
         """Handle check-in or check-out operations"""
         try:
+            # =============== ENHANCED CHECK ===============
+            if not request.user.is_authenticated:
+                return Response({"error": "Authentication required"}, 
+                              status=status.HTTP_401_UNAUTHORIZED)
+            
+            # Get employee profile for logged-in user
+            try:
+                employee = request.user.employee_profile
+            except AttributeError:
+                return Response({"error": "User is not associated with an employee profile"}, 
+                              status=status.HTTP_403_FORBIDDEN)
+            # =============== END OF ENHANCED CHECK ===============
+            
             operation = request.data.get('operation')  # 'check_in' or 'check_out'
             visit_id = request.data.get('visit_id')
             latitude = request.data.get('latitude')
@@ -1335,8 +1281,15 @@ class CaregiverOperationsView(APIView):
                 return Response({"error": "Operation and visit_id are required"}, 
                               status=status.HTTP_400_BAD_REQUEST)
             
-            # Get visit
-            visit = Visit.objects.get(id=visit_id)
+            # Get visit and verify ownership
+            try:
+                visit = Visit.objects.get(id=visit_id, employee=employee)
+            except Visit.DoesNotExist:
+                return Response({"error": "Visit not found or access denied"}, 
+                              status=status.HTTP_404_NOT_FOUND)
+            
+            # Rest of the POST method remains the same...
+            # [Keep all your existing POST logic here]
             
             if operation == 'check_in':
                 # Verify location
@@ -1429,8 +1382,6 @@ class CaregiverOperationsView(APIView):
                 return Response({"error": "Invalid operation"}, 
                               status=status.HTTP_400_BAD_REQUEST)
                 
-        except Visit.DoesNotExist:
-            return Response({"error": "Visit not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             logger.exception("Error in caregiver operation")
             return Response({"error": "Operation failed", "details": str(e)}, 
@@ -1564,135 +1515,3 @@ class EVVGetAccountInfo(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         
-class VisitDetailView(APIView):
-    """
-    Handle individual visit operations (GET, PUT, PATCH, DELETE)
-    """
-    
-    def get_object(self, pk):
-        try:
-            return Visit.objects.get(pk=pk)
-        except Visit.DoesNotExist:
-            return None
-
-    def get(self, request, pk):
-        """
-        Retrieve a specific visit
-        """
-        try:
-            visit = self.get_object(pk)
-            if not visit:
-                return Response(
-                    {"error": "Visit not found"}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            serializer = VisitSerializer(visit)
-            return Response(serializer.data)
-            
-        except Exception as e:
-            logger.exception(f"Error fetching visit {pk}")
-            return Response(
-                {"error": "Failed to fetch visit"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    def patch(self, request, pk):
-        """
-        Partially update a visit (used for checkout)
-        """
-        try:
-            visit = self.get_object(pk)
-            if not visit:
-                return Response(
-                    {"error": "Visit not found"}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            logger.info(f"PATCH request for visit {pk}: {request.data}")
-            
-            if 'check_out_time' in request.data or 'visit_status' in request.data:
-                checkout_data = request.data.copy()
-                
-                if 'check_out_time' in checkout_data and not checkout_data.get('visit_end'):
-                    checkout_data['visit_end'] = checkout_data['check_out_time']
-                
-                if (visit.check_in_time and checkout_data.get('check_out_time') and 
-                    not checkout_data.get('hours_worked')):
-                    try:
-                        check_out_time = datetime.fromisoformat(
-                            checkout_data['check_out_time'].replace('Z', '+00:00')
-                        )
-                        duration = check_out_time - visit.check_in_time
-                        checkout_data['hours_worked'] = round(duration.total_seconds() / 3600, 2)
-                    except (ValueError, KeyError) as e:
-                        logger.warning(f"Could not calculate hours worked: {e}")
-                
-                serializer = VisitSerializer(visit, data=checkout_data, partial=True)
-            else:
-                serializer = VisitSerializer(visit, data=request.data, partial=True)
-            
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data)
-            
-            logger.error(f"Validation errors for visit {pk}: {serializer.errors}")
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            
-        except Exception as e:
-            logger.exception(f"Error updating visit {pk}")
-            return Response(
-                {"error": "Failed to update visit", "details": str(e)}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    def put(self, request, pk):
-        """
-        Fully update a visit
-        """
-        try:
-            visit = self.get_object(pk)
-            if not visit:
-                return Response(
-                    {"error": "Visit not found"}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            serializer = VisitSerializer(visit, data=request.data)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data)
-            
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            
-        except Exception as e:
-            logger.exception(f"Error updating visit {pk}")
-            return Response(
-                {"error": "Failed to update visit"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    def delete(self, request, pk):
-        """
-        Delete a visit
-        """
-        try:
-            visit = self.get_object(pk)
-            if not visit:
-                return Response(
-                    {"error": "Visit not found"}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            visit.delete()
-            return Response(
-                {"message": "Visit deleted successfully"}, 
-                status=status.HTTP_204_NO_CONTENT
-            )
-            
-        except Exception as e:
-            logger.exception(f"Error deleting visit {pk}")
-            return Response(
-                {"error": "Failed to delete visit"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
