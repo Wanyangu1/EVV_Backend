@@ -99,7 +99,7 @@ WSGI_APPLICATION = 'evvapp_backend.wsgi.application'
 
 DATABASES = {
     'default': dj_database_url.config(
-        default=os.environ.get('DATABASE_URL'),  # Render provides this
+        default=os.environ.get('DATABASE_URL'),  
         conn_max_age=600, 
         ssl_require=True   
     )
@@ -130,7 +130,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-# Media files (signatures/images)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
