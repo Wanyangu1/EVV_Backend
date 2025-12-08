@@ -213,55 +213,89 @@ class VisitView(APIView):
             date_from = request.query_params.get('date_from')
             date_to = request.query_params.get('date_to')
             
+            # DEBUG: Log the request
+            logger.info(f"[VisitView GET] User: {request.user.username} (staff: {request.user.is_staff}), "
+                       f"Params: type={visit_type}, schedule_only={schedule_only}, "
+                       f"date_from={date_from}, date_to={date_to}")
+            
             # Start with all visits - include related data using prefetch_related
             visits = Visit.objects.select_related('client', 'employee').all()
             
-            # =============== MODIFIED FILTER LOGIC ===============
-            # Only filter by employee if the user is NOT staff/admin
-            # Staff/Admin users (is_staff=True) can see ALL visits
-            # Regular users (caregivers) only see their own assigned visits
+            # =============== MODIFIED FILTER LOGIC WITH DEBUGGING ===============
             if request.user.is_authenticated:
                 if not request.user.is_staff:  # Only apply filter for non-staff users
                     try:
-                        # Get the employee associated with this user
                         employee = request.user.employee_profile
+                        logger.info(f"[VisitView GET] Filtering for employee: {employee.id} - {employee.first_name} {employee.last_name}")
+                        
+                        # Get total count before filtering
+                        total_before = visits.count()
+                        
                         # Filter visits to only those assigned to this employee
                         visits = visits.filter(employee=employee)
-                    except (AttributeError, Employee.DoesNotExist):
-                        # If user doesn't have an employee profile, return empty
+                        
+                        # DEBUG: Log filtering results
+                        total_after = visits.count()
+                        logger.info(f"[VisitView GET] Filtered from {total_before} to {total_after} visits for employee {employee.id}")
+                        
+                    except AttributeError as e:
+                        logger.warning(f"[VisitView GET] User {request.user.username} has no employee_profile attribute: {str(e)}")
                         visits = visits.none()
+                    except Employee.DoesNotExist:
+                        logger.warning(f"[VisitView GET] User {request.user.username} has no associated employee")
+                        visits = visits.none()
+                else:
+                    logger.info(f"[VisitView GET] Staff user {request.user.username} sees ALL visits")
             else:
-                # Unauthenticated users see nothing
+                logger.warning("[VisitView GET] Unauthenticated user access attempt")
                 visits = visits.none()
             # =============== END OF MODIFIED FILTER ===============
             
-            # Apply existing filters
+            # Apply existing filters - WITH DEBUGGING
             if visit_type:
-                # Handle multiple types separated by commas
+                logger.info(f"[VisitView GET] Filtering by visit_type: {visit_type}")
                 if ',' in visit_type:
                     types = visit_type.split(',')
                     visits = visits.filter(visit_type__in=types)
                 else:
                     visits = visits.filter(visit_type=visit_type)
+                logger.info(f"[VisitView GET] After visit_type filter: {visits.count()} visits")
             
             if schedule_only:
+                logger.info(f"[VisitView GET] Filtering schedule_only=True")
                 visits = visits.filter(visit_type='scheduled')
+                logger.info(f"[VisitView GET] After schedule_only filter: {visits.count()} visits")
             
             if date_from:
+                logger.info(f"[VisitView GET] Filtering date_from: {date_from}")
                 visits = visits.filter(schedule_start_time__date__gte=date_from)
+                logger.info(f"[VisitView GET] After date_from filter: {visits.count()} visits")
             
             if date_to:
+                logger.info(f"[VisitView GET] Filtering date_to: {date_to}")
                 visits = visits.filter(schedule_start_time__date__lte=date_to)
+                logger.info(f"[VisitView GET] After date_to filter: {visits.count()} visits")
             
             # Order by schedule time (most recent first)
             visits = visits.order_by('-schedule_start_time')
+            
+            # DEBUG: Log final results
+            final_count = visits.count()
+            logger.info(f"[VisitView GET] Final result: {final_count} visits for user {request.user.username}")
+            
+            if final_count > 0:
+                # Log first few visits for debugging
+                for i, visit in enumerate(visits[:3]):
+                    logger.info(f"[VisitView GET] Visit {i+1}: ID={visit.id}, "
+                               f"Type={visit.visit_type}, Employee={visit.employee.id if visit.employee else None}, "
+                               f"Start={visit.schedule_start_time}")
             
             # Create a custom response with nested client/employee data
             data = []
             for visit in visits:
                 visit_data = VisitSerializer(visit).data
                 
-                # Add client details - check if client exists
+                # Add client details
                 if visit.client:
                     visit_data['client_details'] = {
                         'id': visit.client.id,
@@ -277,7 +311,7 @@ class VisitView(APIView):
                 else:
                     visit_data['client_details'] = None
                 
-                # Add employee details - check if employee exists
+                # Add employee details
                 if visit.employee:
                     visit_data['employee_details'] = {
                         'id': visit.employee.id,
