@@ -218,15 +218,15 @@ class VisitView(APIView):
             
             # =============== ADD THIS FILTER ===============
             # Filter visits by logged-in user's employee profile
-            if request.user.is_authenticated:
-                try:
-                    # Get the employee associated with this user
-                    employee = request.user.employee_profile
-                    # Filter visits to only those assigned to this employee
-                    visits = visits.filter(employee=employee)
-                except (AttributeError, Employee.DoesNotExist):
-                    # If user doesn't have an employee profile, return empty
-                    visits = visits.none()
+            # if request.user.is_authenticated:
+            #     try:
+            #         # Get the employee associated with this user
+            #         employee = request.user.employee_profile
+            #         # Filter visits to only those assigned to this employee
+            #         visits = visits.filter(employee=employee)
+            #     except (AttributeError, Employee.DoesNotExist):
+            #         # If user doesn't have an employee profile, return empty
+            #         visits = visits.none()
             # =============== END OF ADDED FILTER ===============
             
             # Apply existing filters
