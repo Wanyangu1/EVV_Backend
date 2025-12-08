@@ -199,6 +199,12 @@ class CreateUserForEmployeeView(generics.GenericAPIView):
             }, status=status.HTTP_404_NOT_FOUND)
 
 class VisitView(APIView):
+    """
+    Handle all visit operations:
+    - GET: List all visits (filter by type, date, etc.)
+    - POST: Create new visit (schedule or completed)
+    """
+    
     def get(self, request):
         try:
             # Get query parameters for filtering
@@ -207,51 +213,55 @@ class VisitView(APIView):
             date_from = request.query_params.get('date_from')
             date_to = request.query_params.get('date_to')
             
-            # IMPORTANT: Normalize visit_type parameter
-            if visit_type == 'scheduled':
-                # Handle case-insensitive and multiple spellings
-                visit_type_filter = ['scheduled', 'Scheduled', 'SCHEDULED']
-            elif visit_type:
-                # Handle comma-separated types
-                if ',' in visit_type:
-                    visit_type_filter = [vt.strip() for vt in visit_type.split(',')]
-                else:
-                    visit_type_filter = [visit_type]
-            
-            # Start with all visits
+            # Start with all visits - include related data using prefetch_related
             visits = Visit.objects.select_related('client', 'employee').all()
             
-            # Filter by employee for non-staff users
-            if request.user.is_authenticated and not request.user.is_staff:
-                try:
-                    employee = request.user.employee_profile
-                    visits = visits.filter(employee=employee)
-                except (AttributeError, Employee.DoesNotExist):
-                    visits = visits.none()
+            # =============== MODIFIED FILTER LOGIC ===============
+            # Only filter by employee if the user is NOT staff/admin
+            # Staff/Admin users (is_staff=True) can see ALL visits
+            # Regular users (caregivers) only see their own assigned visits
+            if request.user.is_authenticated:
+                if not request.user.is_staff:  # Only apply filter for non-staff users
+                    try:
+                        # Get the employee associated with this user
+                        employee = request.user.employee_profile
+                        # Filter visits to only those assigned to this employee
+                        visits = visits.filter(employee=employee)
+                    except (AttributeError, Employee.DoesNotExist):
+                        # If user doesn't have an employee profile, return empty
+                        visits = visits.none()
+            else:
+                # Unauthenticated users see nothing
+                visits = visits.none()
+            # =============== END OF MODIFIED FILTER ===============
             
-            # Apply visit_type filter
+            # Apply existing filters
             if visit_type:
-                visits = visits.filter(visit_type__in=visit_type_filter)
+                # Handle multiple types separated by commas
+                if ',' in visit_type:
+                    types = visit_type.split(',')
+                    visits = visits.filter(visit_type__in=types)
+                else:
+                    visits = visits.filter(visit_type=visit_type)
             
-            # Apply schedule_only filter (alternative way)
             if schedule_only:
-                visits = visits.filter(visit_type__in=['scheduled', 'Scheduled', 'SCHEDULED'])
+                visits = visits.filter(visit_type='scheduled')
             
-            # Apply date filters
             if date_from:
                 visits = visits.filter(schedule_start_time__date__gte=date_from)
+            
             if date_to:
                 visits = visits.filter(schedule_start_time__date__lte=date_to)
             
-            # Order results
+            # Order by schedule time (most recent first)
             visits = visits.order_by('-schedule_start_time')
             
-            # Create response
+            # Create a custom response with nested client/employee data
             data = []
             for visit in visits:
                 visit_data = VisitSerializer(visit).data
                 
-                # Add client details
+                # Add client details - check if client exists
                 if visit.client:
                     visit_data['client_details'] = {
                         'id': visit.client.id,
@@ -267,7 +277,7 @@ class VisitView(APIView):
                 else:
                     visit_data['client_details'] = None
                 
-                # Add employee details
+                # Add employee details - check if employee exists
                 if visit.employee:
                     visit_data['employee_details'] = {
                         'id': visit.employee.id,
@@ -279,7 +289,7 @@ class VisitView(APIView):
                 else:
                     visit_data['employee_details'] = None
                 
-                # Add service_date
+                # Add service_date for backward compatibility
                 if visit.schedule_start_time:
                     visit_data['service_date'] = visit.schedule_start_time.date()
                 elif visit.actual_start_time:
@@ -287,109 +297,37 @@ class VisitView(APIView):
                 
                 data.append(visit_data)
             
-            # LOG the response for debugging
-            logger.info(f"VisitView GET - User: {request.user.username}, "
-                       f"Type: {visit_type}, Count: {len(data)}, "
-                       f"Date Range: {date_from} to {date_to}")
-            
             return Response(data)
             
         except Exception as e:
             logger.exception("Error fetching visits")
             return Response({"error": "Failed to fetch visits", "details": str(e)}, 
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        
-class DebugVisitsView(APIView):
-    """Debug endpoint to check scheduled visits"""
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
+
+    def post(self, request):
         try:
-            user = request.user
-            date_from = request.query_params.get('date_from', '2025-12-08')
-            date_to = request.query_params.get('date_to', '2025-12-15')
+            # Check if this is a schedule or completed visit
+            visit_type = request.data.get('visit_type', 'scheduled')
+            logger.info(f"Creating visit of type: {visit_type}")
             
-            response_data = {
-                'debug_info': {
-                    'user': {
-                        'id': user.id,
-                        'username': user.username,
-                        'email': user.email,
-                        'is_staff': user.is_staff,
-                        'is_superuser': user.is_superuser,
-                    },
-                    'date_range': {
-                        'from': date_from,
-                        'to': date_to,
-                    }
-                }
-            }
+            serializer = VisitSerializer(data=request.data, context={'request': request})
             
-            # Check if user has employee profile
-            try:
-                employee = user.employee_profile
-                response_data['debug_info']['employee'] = {
-                    'id': employee.id,
-                    'first_name': employee.first_name,
-                    'last_name': employee.last_name,
-                    'email': employee.email,
-                    'ssn': employee.ssn,
-                }
+            if serializer.is_valid():
+                visit = serializer.save()
                 
-                # Get ALL scheduled visits in date range
-                all_scheduled = Visit.objects.filter(
-                    visit_type='scheduled',
-                    schedule_start_time__date__gte=date_from,
-                    schedule_start_time__date__lte=date_to
-                ).order_by('schedule_start_time')
+                # If this is a completed visit with calls, handle them
+                if visit_type == 'completed' and 'calls' in request.data:
+                    visit.calls = request.data['calls']
+                    visit.save()
                 
-                # Get scheduled visits assigned to this employee
-                employee_scheduled = all_scheduled.filter(employee=employee)
-                
-                # Get some sample visits to see data structure
-                sample_visits = []
-                for visit in all_scheduled[:3]:  # First 3 scheduled visits
-                    sample_visits.append({
-                        'id': visit.id,
-                        'visit_other_id': visit.visit_other_id,
-                        'visit_type': visit.visit_type,
-                        'employee_id': visit.employee.id if visit.employee else None,
-                        'employee_name': f"{visit.employee.first_name} {visit.employee.last_name}" if visit.employee else None,
-                        'client_name': f"{visit.client.first_name} {visit.client.last_name}" if visit.client else None,
-                        'schedule_start_time': visit.schedule_start_time,
-                        'schedule_end_time': visit.schedule_end_time,
-                        'is_active': visit.is_active,
-                    })
-                
-                response_data.update({
-                    'counts': {
-                        'all_scheduled_in_range': all_scheduled.count(),
-                        'assigned_to_employee': employee_scheduled.count(),
-                    },
-                    'sample_visits': sample_visits,
-                    'assigned_visits': [
-                        {
-                            'id': v.id,
-                            'visit_other_id': v.visit_other_id,
-                            'client': f"{v.client.first_name} {v.client.last_name}" if v.client else None,
-                            'schedule_start_time': v.schedule_start_time,
-                            'schedule_end_time': v.schedule_end_time,
-                        }
-                        for v in employee_scheduled[:10]  # First 10 assigned
-                    ]
-                })
-                
-            except AttributeError:
-                response_data['error'] = 'User has no employee_profile'
-            except Employee.DoesNotExist:
-                response_data['error'] = 'Employee profile does not exist'
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
             
-            return Response(response_data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             
         except Exception as e:
-            logger.exception("Debug error")
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Error creating visit")
+            return Response({"error": "Failed to create visit", "details": str(e)}, 
+                          status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class VisitDetailView(APIView):
     """
