@@ -6,7 +6,6 @@ from django.utils import timezone
 from django.contrib.auth import get_user_model
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
-from django.http import JsonResponse
 
 import requests
 from django.conf import settings
@@ -43,9 +42,6 @@ def format_date_mmddyyyy(d: date) -> str:
 
 def safe_str(val):
     return (val or "").strip()
-
-def evv_health_check(request):
-    return JsonResponse({"status": "ok", "service": "EVV backend running"})
 
 def get_user_employee(user):
     """

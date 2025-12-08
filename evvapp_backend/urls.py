@@ -18,11 +18,9 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from evv.views import evv_health_check
 
 urlpatterns = [
-    path("", evv_health_check), 
-    path('admin/', admin.site.urls),
+    path('/', admin.site.urls),
     path("api/", include("evvapp_backend.api.urls")),
     path('api/evv/', include('evv.urls')),
 ]
