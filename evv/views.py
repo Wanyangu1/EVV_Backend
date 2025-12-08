@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.contrib.auth import get_user_model
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
+from django.http import JsonResponse
 
 import requests
 from django.conf import settings
@@ -42,6 +43,9 @@ def format_date_mmddyyyy(d: date) -> str:
 
 def safe_str(val):
     return (val or "").strip()
+
+def evv_health_check(request):
+    return JsonResponse({"status": "ok", "service": "EVV backend running"})
 
 def get_user_employee(user):
     """
@@ -214,15 +218,15 @@ class VisitView(APIView):
             
             # =============== ADD THIS FILTER ===============
             # Filter visits by logged-in user's employee profile
-            # if request.user.is_authenticated:
-            #     try:
-            #         # Get the employee associated with this user
-            #         employee = request.user.employee_profile
-            #         # Filter visits to only those assigned to this employee
-            #         visits = visits.filter(employee=employee)
-            #     except (AttributeError, Employee.DoesNotExist):
-            #         # If user doesn't have an employee profile, return empty
-            #         visits = visits.none()
+            if request.user.is_authenticated:
+                try:
+                    # Get the employee associated with this user
+                    employee = request.user.employee_profile
+                    # Filter visits to only those assigned to this employee
+                    visits = visits.filter(employee=employee)
+                except (AttributeError, Employee.DoesNotExist):
+                    # If user doesn't have an employee profile, return empty
+                    visits = visits.none()
             # =============== END OF ADDED FILTER ===============
             
             # Apply existing filters
@@ -1513,5 +1517,3 @@ class EVVGetAccountInfo(APIView):
                 "details": str(e),
                 "required_format": "Account header must be a valid GUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        
