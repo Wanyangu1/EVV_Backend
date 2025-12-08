@@ -31,6 +31,7 @@ from .views import (
     CreateXrefAndSend,
     UpdateXrefRelationship,
     CreateUserForEmployeeView,
+    DebugVisitsView,
 )
 
 urlpatterns = [
@@ -48,6 +49,7 @@ urlpatterns = [
     # CAREGIVER MOBILE ENDPOINTS
     # ------------------------
     path("caregiver/operations/", CaregiverOperationsView.as_view(), name="caregiver-operations"),
+    path("debug/visits/", DebugVisitsView.as_view(), name="debug-visits"),
     
     # ------------------------
     # EVV API ENDPOINTS
