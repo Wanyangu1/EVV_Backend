@@ -216,18 +216,24 @@ class VisitView(APIView):
             # Start with all visits - include related data using prefetch_related
             visits = Visit.objects.select_related('client', 'employee').all()
             
-            # =============== ADD THIS FILTER ===============
-            # Filter visits by logged-in user's employee profile
+            # =============== MODIFIED FILTER LOGIC ===============
+            # Only filter by employee if the user is NOT staff/admin
+            # Staff/Admin users (is_staff=True) can see ALL visits
+            # Regular users (caregivers) only see their own assigned visits
             if request.user.is_authenticated:
-                try:
-                    # Get the employee associated with this user
-                    employee = request.user.employee_profile
-                    # Filter visits to only those assigned to this employee
-                    visits = visits.filter(employee=employee)
-                except (AttributeError, Employee.DoesNotExist):
-                    # If user doesn't have an employee profile, return empty
-                    visits = visits.none()
-            # =============== END OF ADDED FILTER ===============
+                if not request.user.is_staff:  # Only apply filter for non-staff users
+                    try:
+                        # Get the employee associated with this user
+                        employee = request.user.employee_profile
+                        # Filter visits to only those assigned to this employee
+                        visits = visits.filter(employee=employee)
+                    except (AttributeError, Employee.DoesNotExist):
+                        # If user doesn't have an employee profile, return empty
+                        visits = visits.none()
+            else:
+                # Unauthenticated users see nothing
+                visits = visits.none()
+            # =============== END OF MODIFIED FILTER ===============
             
             # Apply existing filters
             if visit_type:
@@ -298,7 +304,6 @@ class VisitView(APIView):
             return Response({"error": "Failed to fetch visits", "details": str(e)}, 
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    # POST method remains the same
     def post(self, request):
         try:
             # Check if this is a schedule or completed visit
